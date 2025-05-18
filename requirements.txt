@@ -1,2 +1,6 @@
+# filepath: /home/halil/Desktop/repos/EggHunters/requirements.txt
 pygame==2.5.2
-numpy==1.24.3 
+numpy==1.24.3
+torch>=1.10.0
+matplotlib>=3.5.0
+pillow>=10.0.0 

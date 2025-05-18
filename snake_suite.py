@@ -1,0 +1,854 @@
+import pygame
+import random
+import numpy as np
+import torch
+import os
+from enum import Enum
+from collections import namedtuple, deque
+from model import Linear_QNet, QTrainer
+
+pygame.init()
+font = pygame.font.SysFont('arial', 25)
+
+class Direction(Enum):
+    RIGHT = 1
+    LEFT = 2
+    UP = 3
+    DOWN = 4
+
+Point = namedtuple('Point', 'x, y')
+
+# RGB colors
+WHITE = (255, 255, 255)
+RED = (200, 0, 0)
+BLUE1 = (0, 0, 255)
+BLUE2 = (0, 100, 255)
+GREEN1 = (0, 255, 0)
+GREEN2 = (0, 200, 0)
+BLACK = (0, 0, 0)
+
+BLOCK_SIZE = 20
+SPEED = 8  # Daha düşük değer oyunu yavaşlatır
+
+class Snake:
+    def __init__(self, start_pos, color1, color2):
+        self.head = start_pos
+        self.snake = [self.head, Point(self.head.x - BLOCK_SIZE, self.head.y), Point(self.head.x - (2 * BLOCK_SIZE), self.head.y)]
+        self.direction = Direction.RIGHT
+        self.color1 = color1
+        self.color2 = color2
+        self.score = 0
+
+    def move(self, action=None):
+        if action is not None:
+            # For AI snake, action is [straight, right, left]
+            clock_wise = [Direction.RIGHT, Direction.DOWN, Direction.LEFT, Direction.UP]
+            idx = clock_wise.index(self.direction)
+            if np.array_equal(action, [1, 0, 0]):
+                new_dir = clock_wise[idx]
+            elif np.array_equal(action, [0, 1, 0]):
+                next_idx = (idx + 1) % 4
+                new_dir = clock_wise[next_idx]
+            else:  # [0, 0, 1]
+                next_idx = (idx - 1) % 4
+                new_dir = clock_wise[next_idx]
+            self.direction = new_dir
+
+        x, y = self.head.x, self.head.y
+        if self.direction == Direction.RIGHT:
+            x += BLOCK_SIZE
+        elif self.direction == Direction.LEFT:
+            x -= BLOCK_SIZE
+        elif self.direction == Direction.DOWN:
+            y += BLOCK_SIZE
+        elif self.direction == Direction.UP:
+            y -= BLOCK_SIZE
+        self.head = Point(x, y)
+        self.snake.insert(0, self.head)
+
+    def draw(self, display):
+        for pt in self.snake:
+            pygame.draw.rect(display, self.color1, pygame.Rect(pt.x, pt.y, BLOCK_SIZE, BLOCK_SIZE))
+            pygame.draw.rect(display, self.color2, pygame.Rect(pt.x + 4, pt.y + 4, 12, 12))
+
+    def check_collision(self, width, height):
+        # Check boundary collision
+        if (self.head.x >= width or self.head.x < 0 or self.head.y >= height or self.head.y < 0):
+            return True
+        # Check self collision
+        if self.head in self.snake[1:]:
+            return True
+        return False
+
+    def check_food_collision(self, food):
+        if self.head == food:
+            self.score += 1
+            return True
+        return False
+
+    def pop_tail(self):
+        self.snake.pop()
+
+
+class Game:
+    def __init__(self, width=640, height=480):
+        self.width = width
+        self.height = height
+        self.display = pygame.display.set_mode((self.width, self.height))
+        pygame.display.set_caption('Snake Game Suite')
+        self.clock = pygame.time.Clock()
+        self.reset()
+
+    def reset(self):
+        self.food = None
+        self._place_food()
+
+    def _place_food(self):
+        x = random.randint(0, (self.width - BLOCK_SIZE) // BLOCK_SIZE) * BLOCK_SIZE
+        y = random.randint(0, (self.height - BLOCK_SIZE) // BLOCK_SIZE) * BLOCK_SIZE
+        self.food = Point(x, y)
+
+    def draw_food(self):
+        pygame.draw.rect(self.display, RED, pygame.Rect(self.food.x, self.food.y, BLOCK_SIZE, BLOCK_SIZE))
+
+    def draw_score(self, score, pos):
+        text = font.render("Score: " + str(score), True, WHITE)
+        self.display.blit(text, pos)
+
+    def update_display(self):
+        self.display.fill(BLACK)
+        self.draw_food()
+        # FPS hızını SPEED değeriyle sınırla
+        self.clock.tick(SPEED)
+        # We no longer call pygame.display.flip() here
+        # This allows each game mode to draw snakes before flipping
+
+
+def single_player_mode():
+    game = Game()
+    snake = Snake(Point(game.width / 2, game.height / 2), BLUE1, BLUE2)
+    running = True
+    
+    # Draw initial game state before any movement
+    game.display.fill(BLACK)
+    game.draw_food()
+    snake.draw(game.display)
+    game.draw_score(snake.score, [0, 0])
+    pygame.display.flip()
+    pygame.time.delay(500)  # 500ms delay so player can see initial state
+    while running:
+        # Her döngüde bir küçük gecikme ekleyelim
+        pygame.time.delay(50)  # 50ms gecikme
+        
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_LEFT and snake.direction != Direction.RIGHT:
+                    snake.direction = Direction.LEFT
+                elif event.key == pygame.K_RIGHT and snake.direction != Direction.LEFT:
+                    snake.direction = Direction.RIGHT
+                elif event.key == pygame.K_UP and snake.direction != Direction.DOWN:
+                    snake.direction = Direction.UP
+                elif event.key == pygame.K_DOWN and snake.direction != Direction.UP:
+                    snake.direction = Direction.DOWN
+                elif event.key == pygame.K_ESCAPE:
+                    running = False
+
+        snake.move()
+        # Snake collision with walls or itself
+        if snake.check_collision(game.width, game.height):
+            running = False
+            
+        if snake.check_food_collision(game.food):
+            game._place_food()
+        else:
+            snake.pop_tail()
+
+        # First update the background elements
+        game.display.fill(BLACK)
+        game.draw_food()
+        
+        # Then draw the snake and score
+        snake.draw(game.display)
+        game.draw_score(snake.score, [0, 0])
+        
+        # Finally update the display
+        pygame.display.flip()
+        
+        # Show game over message when game ends
+        if not running:
+            font = pygame.font.SysFont('arial', 35)
+            game_over_text = font.render(f'Game Over! Score: {snake.score}', True, WHITE)
+            game.display.blit(game_over_text, [game.width/2 - 160, game.height/2 - 50])
+            return_text = font.render('Press any key to return to menu', True, WHITE)
+            game.display.blit(return_text, [game.width/2 - 200, game.height/2 + 10])
+            pygame.display.flip()
+            
+            # Wait for key press before returning to menu
+            waiting = True
+            while waiting:
+                for event in pygame.event.get():
+                    if event.type == pygame.KEYDOWN or event.type == pygame.QUIT:
+                        waiting = False
+    
+    # Don't quit pygame here, just return to the main menu
+
+
+def pvp_mode():
+    game = Game()
+    snake1 = Snake(Point(game.width / 4, game.height / 2), BLUE1, BLUE2)
+    snake2 = Snake(Point(3 * game.width / 4, game.height / 2), GREEN1, GREEN2)
+    running = True
+    winner = None
+    
+    # Draw initial game state before any movement
+    game.display.fill(BLACK)
+    game.draw_food()
+    snake1.draw(game.display)
+    snake2.draw(game.display)
+    game.draw_score(snake1.score, [0, 0])
+    game.draw_score(snake2.score, [game.width - 100, 0])
+    pygame.display.flip()
+    pygame.time.delay(500)  # 500ms delay so players can see initial state
+    
+    while running:
+        # Her döngüde bir küçük gecikme ekleyelim
+        pygame.time.delay(50)  # 50ms gecikme
+        
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            if event.type == pygame.KEYDOWN:
+                # Player 1 (Arrow keys) - ters yöne gitmesini engelle
+                if event.key == pygame.K_LEFT and snake1.direction != Direction.RIGHT:
+                    snake1.direction = Direction.LEFT
+                elif event.key == pygame.K_RIGHT and snake1.direction != Direction.LEFT:
+                    snake1.direction = Direction.RIGHT
+                elif event.key == pygame.K_UP and snake1.direction != Direction.DOWN:
+                    snake1.direction = Direction.UP
+                elif event.key == pygame.K_DOWN and snake1.direction != Direction.UP:
+                    snake1.direction = Direction.DOWN
+                # Player 2 (WASD) - ters yöne gitmesini engelle
+                elif event.key == pygame.K_a and snake2.direction != Direction.RIGHT:
+                    snake2.direction = Direction.LEFT
+                elif event.key == pygame.K_d and snake2.direction != Direction.LEFT:
+                    snake2.direction = Direction.RIGHT
+                elif event.key == pygame.K_w and snake2.direction != Direction.DOWN:
+                    snake2.direction = Direction.UP
+                elif event.key == pygame.K_s and snake2.direction != Direction.UP:
+                    snake2.direction = Direction.DOWN
+                elif event.key == pygame.K_ESCAPE:
+                    running = False
+
+        snake1.move()
+        snake2.move()
+
+        # Check for collision with walls and self
+        snake1_collision = snake1.check_collision(game.width, game.height)
+        snake2_collision = snake2.check_collision(game.width, game.height)
+        
+        # Check for snake vs snake collisions
+        snake1_hit_snake2 = snake1.head in snake2.snake
+        snake2_hit_snake1 = snake2.head in snake1.snake
+        
+        # Determine winner based on collisions
+        if snake1_collision or snake1_hit_snake2:
+            winner = "Player 2"
+            running = False
+        if snake2_collision or snake2_hit_snake1:
+            winner = "Player 1"
+            running = False
+            
+        # Handle head-on collision (both snakes hit each other in the same frame)
+        if snake1.head == snake2.head:
+            if snake1.score > snake2.score:
+                winner = "Player 1"
+            elif snake2.score > snake1.score:
+                winner = "Player 2"
+            else:
+                winner = "Draw"
+            running = False
+
+        if snake1.check_food_collision(game.food):
+            game._place_food()
+        else:
+            snake1.pop_tail()
+
+        if snake2.check_food_collision(game.food):
+            game._place_food()
+        else:
+            snake2.pop_tail()
+
+        # First update the background elements
+        game.display.fill(BLACK)
+        game.draw_food()
+        
+        # Then draw the snakes and scores
+        snake1.draw(game.display)
+        snake2.draw(game.display)
+        game.draw_score(snake1.score, [0, 0])
+        game.draw_score(snake2.score, [game.width - 100, 0])
+        
+        # Finally update the display
+        pygame.display.flip()
+        
+        # Show game over message when game ends
+        if not running:
+            font = pygame.font.SysFont('arial', 35)
+            if winner:
+                game_over_text = font.render(f'Game Over! {winner} wins!', True, WHITE)
+            else:
+                game_over_text = font.render(f'Game Over!', True, WHITE)
+            
+            game.display.blit(game_over_text, [game.width/2 - 160, game.height/2 - 50])
+            return_text = font.render('Press any key to return to menu', True, WHITE)
+            game.display.blit(return_text, [game.width/2 - 200, game.height/2 + 10])
+            pygame.display.flip()
+            
+            # Wait for key press before returning to menu
+            waiting = True
+            while waiting:
+                for event in pygame.event.get():
+                    if event.type == pygame.KEYDOWN or event.type == pygame.QUIT:
+                        waiting = False
+    
+    # Don't quit pygame here, just return to the main menu
+
+
+def human_vs_ai_mode():
+    game = Game()
+    human_snake = Snake(Point(game.width / 4, game.height / 2), BLUE1, BLUE2)
+    ai_snake = Snake(Point(3 * game.width / 4, game.height / 2), GREEN1, GREEN2)
+    agent = Agent()
+    
+    # Eğitilmiş modeli yükleme
+    enhanced_model_path = './model/model_enhanced.pth'
+    basic_model_path = './model/model.pth'
+    
+    if os.path.exists(enhanced_model_path):
+        agent.model.load_state_dict(torch.load(enhanced_model_path))
+        agent.model.eval()  # Değerlendirme moduna geçir
+        print("AI için geliştirilmiş model yüklendi!")
+    elif os.path.exists(basic_model_path):
+        agent.model.load_state_dict(torch.load(basic_model_path))
+        agent.model.eval()
+        print("AI için basit model yüklendi.")
+    else:
+        print("Eğitilmiş model bulunamadı, rastgele hareketler kullanılacak.")
+        
+    running = True
+    
+    # Draw initial game state before any movement
+    game.display.fill(BLACK)
+    game.draw_food()
+    human_snake.draw(game.display)
+    ai_snake.draw(game.display)
+    game.draw_score(human_snake.score, [0, 0])
+    game.draw_score(ai_snake.score, [game.width - 100, 0])
+    pygame.display.flip()
+    pygame.time.delay(500)  # 500ms delay so player can see initial state
+    
+    # We'll use a simpler approach with a dynamic object instead of a wrapper class
+    
+    while running:
+        # Her döngüde bir küçük gecikme ekleyelim
+        pygame.time.delay(50)  # 50ms gecikme
+        
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_LEFT and human_snake.direction != Direction.RIGHT:
+                    human_snake.direction = Direction.LEFT
+                elif event.key == pygame.K_RIGHT and human_snake.direction != Direction.LEFT:
+                    human_snake.direction = Direction.RIGHT
+                elif event.key == pygame.K_UP and human_snake.direction != Direction.DOWN:
+                    human_snake.direction = Direction.UP
+                elif event.key == pygame.K_DOWN and human_snake.direction != Direction.UP:
+                    human_snake.direction = Direction.DOWN
+                elif event.key == pygame.K_ESCAPE:
+                    running = False
+
+        human_snake.move()
+        
+        # Use the enhanced state function that considers human player position
+        try:
+            # Get the AI's state considering the human player's position
+            state = agent.get_state_for_human(game, human_snake, ai_snake)
+            action = agent.get_action(state)
+        except Exception as e:
+            print(f"AI error: {e}")
+            # If we get an error, let's just make the AI take a random action
+            # to avoid crashing the game
+            action = [0, 0, 0]
+            action[random.randint(0, 2)] = 1  # Set one random action to 1
+        
+        ai_snake.move(action)
+        
+        # Check normal collisions (wall and self)
+        human_collision = human_snake.check_collision(game.width, game.height)
+        ai_collision = ai_snake.check_collision(game.width, game.height)
+        
+        # Check if human head collides with AI snake body
+        human_hit_ai = human_snake.head in ai_snake.snake
+        
+        # Check if AI head collides with human snake body
+        ai_hit_human = ai_snake.head in human_snake.snake
+        
+        # Determine game over conditions and winner
+        game_over = False
+        winner = None
+        
+        if human_collision or human_hit_ai:
+            game_over = True
+            winner = "AI"
+        
+        if ai_collision or ai_hit_human:
+            game_over = True
+            winner = "Human"
+        
+        # If both collide in the same frame, it's a tie
+        if (human_collision or human_hit_ai) and (ai_collision or ai_hit_human):
+            winner = "Tie"
+        
+        # If any collision happens, end the game
+        if game_over:
+            running = False
+
+        if human_snake.check_food_collision(game.food):
+            game._place_food()
+        else:
+            human_snake.pop_tail()
+
+        if ai_snake.check_food_collision(game.food):
+            game._place_food()
+        else:
+            ai_snake.pop_tail()
+
+        # First update the background elements
+        game.display.fill(BLACK)
+        game.draw_food()
+        
+        # Then draw the snakes and scores
+        human_snake.draw(game.display)
+        ai_snake.draw(game.display)
+        game.draw_score(human_snake.score, [0, 0])
+        game.draw_score(ai_snake.score, [game.width - 100, 0])
+        
+        # Finally update the display
+        pygame.display.flip()
+        
+        # Show game over message when game ends
+        if not running:
+            # We already have the winner determined earlier
+            font = pygame.font.SysFont('arial', 35)
+            if winner:
+                game_over_text = font.render(f'Game Over! {winner} wins!', True, WHITE)
+            else:
+                game_over_text = font.render(f'Game Over!', True, WHITE)
+                
+            game.display.blit(game_over_text, [game.width/2 - 160, game.height/2 - 50])
+            return_text = font.render('Press any key to return to menu', True, WHITE)
+            game.display.blit(return_text, [game.width/2 - 200, game.height/2 + 10])
+            pygame.display.flip()
+            
+            # Wait for key press before returning to menu
+            waiting = True
+            while waiting:
+                for event in pygame.event.get():
+                    if event.type == pygame.KEYDOWN or event.type == pygame.QUIT:
+                        waiting = False
+    
+    # Don't quit pygame here, just return to the main menu
+
+
+class Agent:
+    def __init__(self):
+        self.n_games = 0
+        self.epsilon = 0  # randomness
+        self.gamma = 0.9  # discount rate
+        self.memory = deque(maxlen=100_000)  # popleft()
+        self.model = Linear_QNet(13, 256, 3)  # Enhanced model with human awareness
+        self.trainer = QTrainer(self.model, lr=0.001, gamma=self.gamma)
+
+    def get_state(self, game, snake):
+        # Standard state function for single player mode
+        head = snake.snake[0]
+        
+        point_l = Point(head.x - BLOCK_SIZE, head.y)
+        point_r = Point(head.x + BLOCK_SIZE, head.y)
+        point_u = Point(head.x, head.y - BLOCK_SIZE)
+        point_d = Point(head.x, head.y + BLOCK_SIZE)
+        
+        # Current direction
+        dir_l = snake.direction == Direction.LEFT
+        dir_r = snake.direction == Direction.RIGHT
+        dir_u = snake.direction == Direction.UP
+        dir_d = snake.direction == Direction.DOWN
+        
+        # Helper function for collision detection
+        def is_collision(pt):
+            # Walls
+            if pt.x >= game.width or pt.x < 0 or pt.y >= game.height or pt.y < 0:
+                return True
+            # Self body (excluding head)
+            return pt in snake.snake[1:]
+        
+        state = [
+            # Danger straight
+            (dir_r and is_collision(point_r)) or 
+            (dir_l and is_collision(point_l)) or 
+            (dir_u and is_collision(point_u)) or 
+            (dir_d and is_collision(point_d)),
+            
+            # Danger right
+            (dir_u and is_collision(point_r)) or 
+            (dir_d and is_collision(point_l)) or
+            (dir_l and is_collision(point_u)) or 
+            (dir_r and is_collision(point_d)),
+            
+            # Danger left
+            (dir_d and is_collision(point_r)) or 
+            (dir_u and is_collision(point_l)) or 
+            (dir_r and is_collision(point_u)) or 
+            (dir_l and is_collision(point_d)),
+            
+            # Move direction
+            dir_l,
+            dir_r,
+            dir_u,
+            dir_d,
+            
+            # Food location
+            game.food.x < head.x,  # food left
+            game.food.x > head.x,  # food right
+            game.food.y < head.y,  # food up
+            game.food.y > head.y,  # food down
+            
+            # Dummy values for human detection (for compatibility)
+            False,  # No human in front
+            False   # No human nearby
+        ]
+        
+        return np.array(state, dtype=int)
+
+    def get_state_for_human(self, game, human_snake, ai_snake):
+        """Enhanced state function that includes human player position"""
+        head = ai_snake.snake[0]
+        
+        # Check points
+        point_l = Point(head.x - BLOCK_SIZE, head.y)
+        point_r = Point(head.x + BLOCK_SIZE, head.y)
+        point_u = Point(head.x, head.y - BLOCK_SIZE)
+        point_d = Point(head.x, head.y + BLOCK_SIZE)
+        
+        # Snake direction
+        dir_l = ai_snake.direction == Direction.LEFT
+        dir_r = ai_snake.direction == Direction.RIGHT
+        dir_u = ai_snake.direction == Direction.UP
+        dir_d = ai_snake.direction == Direction.DOWN
+        
+        # Helper function for collision detection
+        def is_collision(pt):
+            # Walls
+            if pt.x >= game.width or pt.x < 0 or pt.y >= game.height or pt.y < 0:
+                return True
+            # Self body
+            if pt in ai_snake.snake[1:]:
+                return True
+            # Human snake
+            if pt in human_snake.snake:
+                return True
+            return False
+        
+        state = [
+            # Danger straight
+            (dir_r and is_collision(point_r)) or 
+            (dir_l and is_collision(point_l)) or 
+            (dir_u and is_collision(point_u)) or 
+            (dir_d and is_collision(point_d)),
+            
+            # Danger right
+            (dir_u and is_collision(point_r)) or 
+            (dir_d and is_collision(point_l)) or
+            (dir_l and is_collision(point_u)) or 
+            (dir_r and is_collision(point_d)),
+            
+            # Danger left
+            (dir_d and is_collision(point_r)) or 
+            (dir_u and is_collision(point_l)) or 
+            (dir_r and is_collision(point_u)) or 
+            (dir_l and is_collision(point_d)),
+            
+            # Move direction
+            dir_l,
+            dir_r,
+            dir_u,
+            dir_d,
+            
+            # Food location
+            game.food.x < head.x,  # food left
+            game.food.x > head.x,  # food right
+            game.food.y < head.y,  # food up
+            game.food.y > head.y,  # food down
+        ]
+        
+        # Add human snake position to the state
+        human_head = human_snake.snake[0]
+        
+        # Is human snake's head in front of AI?
+        human_in_front = (
+            (dir_r and human_head.x > head.x) or
+            (dir_l and human_head.x < head.x) or
+            (dir_u and human_head.y < head.y) or
+            (dir_d and human_head.y > head.y)
+        )
+        
+        # Is human snake nearby?
+        human_is_close = abs(head.x - human_head.x) + abs(head.y - human_head.y) < 5 * BLOCK_SIZE
+        
+        # Update state
+        state.extend([human_in_front, human_is_close])
+        
+        return np.array(state, dtype=int)
+        
+    def get_action(self, state):
+        # random moves: tradeoff exploration / exploitation
+        self.epsilon = 50 - self.n_games
+        final_move = [0, 0, 0]
+        if random.randint(0, 200) < self.epsilon:
+            move = random.randint(0, 2)
+            final_move[move] = 1
+        else:
+            state0 = torch.tensor(state, dtype=torch.float)
+            prediction = self.model(state0)
+            move = torch.argmax(prediction).item()
+            final_move[move] = 1
+        
+        return final_move
+
+
+def main():
+    pygame.init()
+    menu_font = pygame.font.SysFont('arial', 30)
+    menu_display = pygame.display.set_mode((640, 480))
+    pygame.display.set_caption('Snake Game Suite - Main Menu')
+    clock = pygame.time.Clock()
+    menu_running = True
+    
+    # Initialize only once
+    pygame.init()
+    
+    while menu_running:
+        # Redraw the menu
+        menu_display.fill(BLACK)
+        title = menu_font.render('Snake Game Suite', True, WHITE)
+        option1 = menu_font.render('1. Single Player', True, WHITE)
+        option2 = menu_font.render('2. PvP (2 Players)', True, WHITE)
+        option3 = menu_font.render('3. Human vs AI', True, WHITE)
+        option4 = menu_font.render('Q. Quit', True, WHITE)
+        menu_display.blit(title, (200, 100))
+        menu_display.blit(option1, (200, 200))
+        menu_display.blit(option2, (200, 250))
+        menu_display.blit(option3, (200, 300))
+        menu_display.blit(option4, (200, 350))
+        pygame.display.flip()
+        
+        # Process all events before proceeding
+        event_detected = False
+        for event in pygame.event.get():
+            event_detected = True
+            if event.type == pygame.QUIT:
+                menu_running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_1:
+                    single_player_mode()
+                    # Recreate the display after returning from a game mode
+                    menu_display = pygame.display.set_mode((640, 480))
+                    pygame.display.set_caption('Snake Game Suite - Main Menu')
+                elif event.key == pygame.K_2:
+                    pvp_mode()
+                    # Recreate the display after returning from a game mode
+                    menu_display = pygame.display.set_mode((640, 480))
+                    pygame.display.set_caption('Snake Game Suite - Main Menu')
+                elif event.key == pygame.K_3:
+                    human_vs_ai_mode()
+                    # Recreate the display after returning from a game mode
+                    menu_display = pygame.display.set_mode((640, 480))
+                    pygame.display.set_caption('Snake Game Suite - Main Menu')
+                elif event.key == pygame.K_q:
+                    menu_running = False
+        
+        # If no events were processed, add a small delay to prevent CPU overuse
+        if not event_detected:
+            clock.tick(30)  # Limit to 30 frames per second when idle
+            
+    pygame.quit()
+
+
+if __name__ == '__main__':
+    main()
+    def __init__(self):
+        self.n_games = 0
+        self.epsilon = 0  # randomness
+        self.gamma = 0.9  # discount rate
+        self.memory = deque(maxlen=100_000)  # popleft()
+        self.model = Linear_QNet(13, 256, 3)  # Enhanced model with human awareness
+        self.trainer = QTrainer(self.model, lr=0.001, gamma=self.gamma)
+
+    def get_state(self, game, snake):
+        # Standard state function for single player mode
+        head = snake.snake[0]
+        
+        point_l = Point(head.x - BLOCK_SIZE, head.y)
+        point_r = Point(head.x + BLOCK_SIZE, head.y)
+        point_u = Point(head.x, head.y - BLOCK_SIZE)
+        point_d = Point(head.x, head.y + BLOCK_SIZE)
+        
+        # Current direction
+        dir_l = snake.direction == Direction.LEFT
+        dir_r = snake.direction == Direction.RIGHT
+        dir_u = snake.direction == Direction.UP
+        dir_d = snake.direction == Direction.DOWN
+        
+        # Helper function for collision detection
+        def is_collision(pt):
+            # Walls
+            if pt.x >= game.width or pt.x < 0 or pt.y >= game.height or pt.y < 0:
+                return True
+            # Self body (excluding head)
+            return pt in snake.snake[1:]
+        
+        state = [
+            # Danger straight
+            (dir_r and is_collision(point_r)) or 
+            (dir_l and is_collision(point_l)) or 
+            (dir_u and is_collision(point_u)) or 
+            (dir_d and is_collision(point_d)),
+            
+            # Danger right
+            (dir_u and is_collision(point_r)) or 
+            (dir_d and is_collision(point_l)) or
+            (dir_l and is_collision(point_u)) or 
+            (dir_r and is_collision(point_d)),
+            
+            # Danger left
+            (dir_d and is_collision(point_r)) or 
+            (dir_u and is_collision(point_l)) or 
+            (dir_r and is_collision(point_u)) or 
+            (dir_l and is_collision(point_d)),
+            
+            # Move direction
+            dir_l,
+            dir_r,
+            dir_u,
+            dir_d,
+            
+            # Food location
+            game.food.x < head.x,  # food left
+            game.food.x > head.x,  # food right
+            game.food.y < head.y,  # food up
+            game.food.y > head.y,  # food down
+            
+            # Dummy values for human detection (for compatibility)
+            False,  # No human in front
+            False   # No human nearby
+        ]
+        
+        return np.array(state, dtype=int)
+
+    def get_state_for_human(self, game, human_snake, ai_snake):
+        """Enhanced state function that includes human player position"""
+        head = ai_snake.snake[0]
+        
+        # Check points
+        point_l = Point(head.x - BLOCK_SIZE, head.y)
+        point_r = Point(head.x + BLOCK_SIZE, head.y)
+        point_u = Point(head.x, head.y - BLOCK_SIZE)
+        point_d = Point(head.x, head.y + BLOCK_SIZE)
+        
+        # Snake direction
+        dir_l = ai_snake.direction == Direction.LEFT
+        dir_r = ai_snake.direction == Direction.RIGHT
+        dir_u = ai_snake.direction == Direction.UP
+        dir_d = ai_snake.direction == Direction.DOWN
+        
+        # Helper function for collision detection
+        def is_collision(pt):
+            # Walls
+            if pt.x >= game.width or pt.x < 0 or pt.y >= game.height or pt.y < 0:
+                return True
+            # Self body
+            if pt in ai_snake.snake[1:]:
+                return True
+            # Human snake
+            if pt in human_snake.snake:
+                return True
+            return False
+        
+        state = [
+            # Danger straight
+            (dir_r and is_collision(point_r)) or 
+            (dir_l and is_collision(point_l)) or 
+            (dir_u and is_collision(point_u)) or 
+            (dir_d and is_collision(point_d)),
+            
+            # Danger right
+            (dir_u and is_collision(point_r)) or 
+            (dir_d and is_collision(point_l)) or
+            (dir_l and is_collision(point_u)) or 
+            (dir_r and is_collision(point_d)),
+            
+            # Danger left
+            (dir_d and is_collision(point_r)) or 
+            (dir_u and is_collision(point_l)) or 
+            (dir_r and is_collision(point_u)) or 
+            (dir_l and is_collision(point_d)),
+            
+            # Move direction
+            dir_l,
+            dir_r,
+            dir_u,
+            dir_d,
+            
+            # Food location
+            game.food.x < head.x,  # food left
+            game.food.x > head.x,  # food right
+            game.food.y < head.y,  # food up
+            game.food.y > head.y,  # food down
+        ]
+        
+        # Add human snake position to the state
+        human_head = human_snake.snake[0]
+        
+        # Is human snake's head in front of AI?
+        human_in_front = (
+            (dir_r and human_head.x > head.x) or
+            (dir_l and human_head.x < head.x) or
+            (dir_u and human_head.y < head.y) or
+            (dir_d and human_head.y > head.y)
+        )
+        
+        # Is human snake nearby?
+        human_is_close = abs(head.x - human_head.x) + abs(head.y - human_head.y) < 5 * BLOCK_SIZE
+        
+        # Update state
+        state.extend([human_in_front, human_is_close])
+        
+        return np.array(state, dtype=int)
+        
+    def get_action(self, state):
+        # random moves: tradeoff exploration / exploitation
+        self.epsilon = 50 - self.n_games
+        final_move = [0, 0, 0]
+        if random.randint(0, 200) < self.epsilon:
+            move = random.randint(0, 2)
+            final_move[move] = 1
+        else:
+            state0 = torch.tensor(state, dtype=torch.float)
+            prediction = self.model(state0)
+            move = torch.argmax(prediction).item()
+            final_move[move] = 1
+        
+        return final_move
